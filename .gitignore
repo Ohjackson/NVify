@@ -1,0 +1,18 @@
+# data & artifacts
+data/*.csv
+data/*.xlsx
+data/raw/*
+data/processed/*
+
+
+# notebooks
+*.ipynb_checkpoints
+
+# audio
+*.mp3
+*.wav
+
+# env
+.venv/
+__pycache__/
+*.pyc
