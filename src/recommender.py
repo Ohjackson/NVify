@@ -16,55 +16,71 @@ from typing import List
 # -----------------------------
 # (1) Load Trained Assets
 # -----------------------------
+# recommender.py
 def load_assets(cf_path='cf_model_final.pkl',
                 meta_path='track_meta_db.pkl',
-                rank_path='ranking_model_final.pkl'):
+                rank_path='ranking_model_final.pkl',
+                # ⭐ 매핑 파일 경로 인자 추가
+                mapping_path='lastfm_to_spotify_mapping.pkl'): 
     print("[INFO] Loading trained models and metadata...")
     try:
+        # 기존 모델 로드
         cf_model = pickle.load(open(cf_path, 'rb'))
         meta_db = pickle.load(open(meta_path, 'rb'))
         ranker = pickle.load(open(rank_path, 'rb'))
+        # ⭐ 매핑 DB 로드
+        mapping_db = pickle.load(open(mapping_path, 'rb')) 
     except FileNotFoundError as e:
-        print(f"[ERROR] Missing model file: {e}")
+        print(f"[ERROR] Missing required file: {e}")
         raise SystemExit
 
-    print("   - cf_model_final.pkl, track_meta_db.pkl, ranking_model_final.pkl loaded successfully.")
-    return cf_model, meta_db, ranker
-
+    print("   - ... all assets loaded successfully.")
+    # ⭐ mapping_db를 함께 반환
+    return cf_model, meta_db, ranker, mapping_db
 
 # -----------------------------
 # (2) Compute Features per Track
 # -----------------------------
 def compute_features(user_id: str,
-                     candidate_tracks: List[str],
+                     candidate_tracks: List[str], # Last.fm ID 목록
                      cf_model,
                      meta_db,
+                     mapping_db, # ⭐ 매핑 DB 인자 추가
                      user_valence=0.5,
                      user_energy=0.5):
     """
-    Compute taste_score (CF), emotion_score (distance-based), and novelty_score (popularity).
+    Compute features after mapping Last.fm ID to Spotify ID.
     """
     rows = []
-    for tid in candidate_tracks:
+    for lastfm_tid in candidate_tracks: # Last.fm ID 사용
+
+        # ⭐⭐ 핵심 로직: Spotify ID로 변환
+        spotify_tid = mapping_db.get(lastfm_tid, None)
+        
+        if spotify_tid is None:
+            # 매핑에 실패한 4%의 트랙은 건너뜁니다.
+            continue 
+
+        # 이제 모든 특징 계산은 Spotify ID를 사용합니다.
+        
         # taste_score (from CF model)
         try:
-            taste = cf_model.predict(user_id, tid).est
+            taste = cf_model.predict(user_id, spotify_tid).est # Spotify ID 사용
         except Exception:
-            taste = 0.5  # fallback if user-track not found
+            taste = 0.5 
 
         # track metadata (valence, energy, rating count)
-        meta = meta_db.get(tid, {'valence': 0.5, 'energy': 0.5, 'total_rating_count': 1})
+        meta = meta_db.get(spotify_tid, {'valence': 0.5, 'energy': 0.5, 'total_rating_count': 1}) # Spotify ID 사용
         valence, energy = meta.get('valence', 0.5), meta.get('energy', 0.5)
         count = meta.get('total_rating_count', 1)
 
-        # emotion_score: inverse Euclidean distance
+        # emotion_score, novelty_score 계산 로직은 동일
         distance = np.sqrt((user_valence - valence) ** 2 + (user_energy - energy) ** 2)
         emotion = 1 / (1 + distance)
-
-        # novelty_score: inverse popularity
         novelty = 1 / (count + 1)
 
-        rows.append([tid, taste, emotion, novelty])
+        # 최종 DF에는 원래의 Last.fm ID를 기록하여 테스트 데이터와 매칭합니다.
+        rows.append([lastfm_tid, taste, emotion, novelty]) 
 
     df = pd.DataFrame(rows, columns=['track_id', 'taste_score', 'emotion_score', 'novelty_score'])
     return df
@@ -85,16 +101,16 @@ def rank_tracks(df_features: pd.DataFrame, ranker, topK=20):
 # -----------------------------
 def recommend(user_id: str,
               candidate_tracks: List[str],
+              cf_model, meta_db, ranker, mapping_db,
               user_valence=0.5,
               user_energy=0.5,
               topK=20):
-    """
-    Recommend topK tracks for a given user.
-    """
-    cf_model, meta_db, ranker = load_assets()
+    
+    
     print(f"[INFO] Generating recommendations for user '{user_id}' ...")
 
-    df_features = compute_features(user_id, candidate_tracks, cf_model, meta_db,
+    # mapping_db를 compute_features에 전달
+    df_features = compute_features(user_id, candidate_tracks, cf_model, meta_db, mapping_db,
                                    user_valence=user_valence, user_energy=user_energy)
     ranked = rank_tracks(df_features, ranker, topK=topK)
 
