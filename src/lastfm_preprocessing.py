@@ -1,3 +1,32 @@
+# ==========================================================
+# 🎵 NVify - 데이터 전처리 및 필터링 파이프라인 (Optimized)
+# ==========================================================
+#
+# 📝 설명:
+#   Last.fm JSON 데이터셋(감정, 상호작용)을 Pandas DataFrame으로 변환하고, 
+#   VADS 피처 정규화 및 메모리 최적화(Category Type), 최소 상호작용 필터링을
+#   적용하여 하이브리드 추천을 위한 클린 데이터를 생성합니다.
+#
+# ----------------------------------------------------------
+# 📁 파일 정보
+# ----------------------------------------------------------
+#
+# ➡️ 입력 파일 (Input):
+#   - item_vads.json: 트랙 VADS(Valence, Arousal, Dominance, Sentiment) 점수
+#   - top_tracks.json: 사용자별 Top Tracks 청취 기록
+#
+# ⬅️ 출력 파일 (Output):
+#   - lastfm_music_emotion_clean.csv: 정규화된 음악 감성 특징
+#   - lastfm_user_ratings_min3.csv: 최소 상호작용 필터링된 사용자 기록
+#   - lastfm_hybrid_min3.csv: 최종 병합된 하이브리드 데이터셋
+#
+# 🛠️ 주요 라이브러리:
+#   - pandas, numpy, sklearn (MinMaxScaler), re
+#
+# ==========================================================
+# 1. 설정 및 초기화
+# ==========================================================
+
 import json
 import pandas as pd
 import numpy as np
@@ -15,7 +44,7 @@ def clean_track_id(track_id):
     return track_id.strip().lower()
 
 # ------------------------------------------------------------
-# 노래 제목 및 가수 분리 함수 (⭐⭐ 수정됨: 파이프 '╎' 구분자 추가)
+# 노래 제목 및 가수 분리 함수
 # ------------------------------------------------------------
 def extract_title_artist(raw_track_string):
     # 1. 파이프 '╎' 기준으로 분리 시도 (Last.fm 포맷에서 흔함)
@@ -35,9 +64,6 @@ def extract_title_artist(raw_track_string):
     # 3. 쉼표(,) 기준으로 분리 시도: '제목, 가수' 형태 처리
     if ',' in raw_track_string:
         parts = raw_track_string.split(',', 1) 
-        # 단, 쉼표 분리는 제목에 쉼표가 있을 경우 부정확할 수 있음.
-        # 일반적인 포맷이 아니라고 가정하고 분리하지 않고 전체를 제목으로 남겨둘 수도 있지만, 
-        # 여기서는 일단 분리 로직 유지
         title = parts[0].strip()
         artist = parts[1].strip()
         return title, artist
@@ -45,6 +71,10 @@ def extract_title_artist(raw_track_string):
     # 분리가 어려울 경우: 제목 = 원본, 가수 = 빈 값
     return raw_track_string.strip(), ""
 
+
+# ==========================================================
+# 2. 핵심 함수 정의 (Core Functions)
+# ==========================================================
 
 # ------------------------------------------------------------
 # 1️⃣ MUSIC INFO 전처리
@@ -60,10 +90,11 @@ def preprocess_music_info(vads_path, out_path):
     for track, vads in tracks.items():
         if isinstance(vads, list) and len(vads) == 4:
             valence, arousal, dominance, sentiment = vads
+            # Arousal을 Energy로 컬럼명 변경
             records.append({
                 "track_id": track,
                 "valence": valence,
-                "energy": arousal,
+                "energy": arousal, 
                 "dominance": dominance,
                 "sentiment": sentiment
             })
@@ -71,25 +102,18 @@ def preprocess_music_info(vads_path, out_path):
     df_music = pd.DataFrame(records)
     print(f"   - 원본 트랙 수: {len(df_music):,}")
 
-    # track_id 정리
+    # track_id 정리 및 중복 제거
     df_music['track_id'] = df_music['track_id'].apply(clean_track_id)
-
-    # 정규화 후 중복된 track_id 제거
     original_count = len(df_music)
-    # 중복된 track_id 중 첫 번째 레코드만 남깁니다.
     df_music.drop_duplicates(subset=['track_id'], keep='first', inplace=True) 
-    
     print(f"   - 정규화 후 중복 제거된 트랙 수: {len(df_music):,} (제거: {original_count - len(df_music):,})")
-    # `track_id`가 없는 데이터 제거
-    df_music = df_music.dropna(subset=['track_id'])
     
-    # ⭐ 최적화: track_id를 category 타입으로 변환하여 메모리 절약
+    # 빈 track_id 제거 및 Category 타입 변환 (메모리 최적화)
+    df_music = df_music.dropna(subset=['track_id'])
     df_music['track_id'] = df_music['track_id'].astype('category')
 
-    # 결측치 제거
+    # V/E 결측치 제거 및 0~1 정규화
     df_music = df_music.dropna(subset=["valence", "energy"])
-
-    # 0~1 정규화
     scaler = MinMaxScaler()
     df_music[["valence", "energy"]] = scaler.fit_transform(df_music[["valence", "energy"]])
 
@@ -102,7 +126,7 @@ def preprocess_music_info(vads_path, out_path):
 
 
 # ------------------------------------------------------------
-# 2️⃣ USER HISTORY 전처리 (rank → rating) (수정됨)
+# 2️⃣ USER HISTORY 전처리 (rank → rating)
 # ------------------------------------------------------------
 def preprocess_user_history(top_path):
     print("[2] User Listening History 전처리 시작")
@@ -113,19 +137,20 @@ def preprocess_user_history(top_path):
     user_records = []
     for user, tracks in top_tracks.items():
         n = len(tracks)
-        if n <= 2:
+        if n <= 2: # 상호작용이 2개 이하인 유저는 건너뜁니다.
             continue
         for rank, track_raw in enumerate(tracks, start=1):
+            # 순위(Rank)를 기반으로 0~1 사이의 평점(Rating) 계산
             rating = 1 - (rank - 1) / (n - 1) if n > 1 else 1.0
             
-            # ⭐ 새로운 컬럼: original_title, artist 추출
+            # 제목 및 가수 추출
             title, artist = extract_title_artist(track_raw)
             
             user_records.append({
                 "user_id": user,
-                "track_id": track_raw, # 일단 원본을 저장
-                "original_title": title, # Spotify 매핑용 제목
-                "artist": artist,        # Spotify 매핑용 가수
+                "track_id": track_raw, # 원본 track_id (정규화 전)
+                "original_title": title, 
+                "artist": artist,        
                 "rating": rating
             })
 
@@ -133,21 +158,16 @@ def preprocess_user_history(top_path):
     print(f"   - 유저 수: {df_user['user_id'].nunique():,}")
     print(f"   - 총 상호작용 수: {len(df_user):,}")
 
-    # 1. track_id 정리 (병합 키로 사용될 클리닝된 ID 생성)
-    # 기존 track_id 컬럼을 클리닝하여 병합 키로 사용합니다.
+    # track_id 정리 및 빈 값 제거
     df_user['track_id'] = df_user['track_id'].apply(clean_track_id)
-    
-    # 2. 빈 문자열 ("")을 NaN으로 변환 및 제거 (기존 수정 반영)
     df_user['track_id'] = df_user['track_id'].replace('', np.nan) 
-    
-    # `track_id`가 없는 데이터 제거
     df_user = df_user.dropna(subset=['track_id'])
     
-    # 3. 최적화: category 타입 변환
+    # Category 타입 변환 (메모리 최적화)
     df_user['user_id'] = df_user['user_id'].astype('category')
     df_user['track_id'] = df_user['track_id'].astype('category')
-    df_user['original_title'] = df_user['original_title'].astype('category') # 새 컬럼 추가
-    df_user['artist'] = df_user['artist'].astype('category') # 새 컬럼 추가
+    df_user['original_title'] = df_user['original_title'].astype('category') 
+    df_user['artist'] = df_user['artist'].astype('category') 
 
     return df_user
 
@@ -162,27 +182,27 @@ def filter_min_interactions(df, min_user=3, min_item=5):
     initial_items = df['track_id'].nunique()
     initial_rows = len(df)
     
-    # 필터링 반복: 필터링 후에도 기준 미달인 유저/아이템이 생길 수 있으므로 안정화될 때까지 반복
+    # 안정화될 때까지 필터링 반복
     while True:
         prev_rows = len(df)
         
-        # 유저 필터
+        # 유저 필터 (min_user 이상)
         ucnt = df["user_id"].value_counts()
         keep_users = ucnt[ucnt >= min_user].index
         df = df[df["user_id"].isin(keep_users)]
 
-        # 아이템 필터
+        # 아이템 필터 (min_item 이상)
         icnt = df["track_id"].value_counts()
         keep_items = icnt[icnt >= min_item].index
         df = df[df["track_id"].isin(keep_items)]
         
         if len(df) == prev_rows:
-            break # 더 이상 변화가 없으면 종료
+            break
             
     print(f"   - 초기 데이터: users={initial_users:,}, items={initial_items:,}, rows={initial_rows:,}")
     print(f"   - 최종 데이터: users={df['user_id'].nunique():,}, items={df['track_id'].nunique():,}, rows={len(df):,}")
 
-    # 필터링 후 category 타입을 다시 설정하여 미사용 메모리 해제
+    # 사용하지 않는 카테고리 메모리 해제
     df['user_id'] = df['user_id'].cat.remove_unused_categories()
     df['track_id'] = df['track_id'].cat.remove_unused_categories()
 
@@ -195,25 +215,22 @@ def filter_min_interactions(df, min_user=3, min_item=5):
 def merge_datasets(user_df, music_df, out_path):
     print("[4] Hybrid 데이터 병합 시작")
 
-    # 병합
-    # track_id가 category 타입이므로, 효율적인 병합이 기대됨
+    # track_id를 기준으로 내부 조인(inner merge)
     merged = user_df.merge(music_df, on="track_id", how="inner")
     print(f"   - 병합 후 shape: {merged.shape}")
     print(f"   - 유저 수: {merged['user_id'].nunique():,}")
     print(f"   - 트랙 수: {merged['track_id'].nunique():,}")
     
     # 병합된 데이터 저장
-    # to_csv도 메모리 효율화 덕분에 빨라짐
     merged.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"[4✅] Hybrid 데이터 저장 완료 → {out_path}\n")
 
-    # 병합된 데이터를 반환
     return merged
 
 
-# ------------------------------------------------------------
-# MAIN
-# ------------------------------------------------------------
+# ==========================================================
+# 3. 메인 실행 로직 (__main__)
+# ==========================================================
 if __name__ == "__main__":
     # 실행 경로 설정
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -229,17 +246,17 @@ if __name__ == "__main__":
     print(" LAST.FM JSON → CLEAN CSV PIPELINE START (Optimized)")
     print("============================================================")
 
-    # 1. Music Info 전처리 및 저장 (track_id: category 타입 적용)
+    # 1. Music Info 전처리 및 저장
     df_music = preprocess_music_info(vads_path, out_music)
     
-    # 2. User History 전처리 (user_id, track_id: category 타입 적용)
+    # 2. User History 전처리
     df_user = preprocess_user_history(top_path)
     
-    # 3. 최소 상호작용 필터링
+    # 3. 최소 상호작용 필터링 및 저장
     df_user_min = filter_min_interactions(df_user, min_user=3, min_item=5)
     df_user_min.to_csv(out_user_min3, index=False, encoding="utf-8-sig")
 
-    # 4. Hybrid 데이터 병합 및 저장 (최적화된 타입 덕분에 병합 속도 개선)
+    # 4. Hybrid 데이터 병합 및 저장
     merged_data = merge_datasets(df_user_min, df_music, out_hybrid_min3)
 
     print("============================================================")

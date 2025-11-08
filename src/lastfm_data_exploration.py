@@ -1,21 +1,32 @@
-"""
-============================================================
-LAST.FM RAW JSON DATA EXPLORATION
-============================================================
-
-탐색 대상:
- - item_vads.json (감정 피처)
- - top_tracks.json (사용자-트랙 상호작용)
- - item_tags.json (태그 구조 요약)
-
-기능:
- - JSON 구조 깊이 탐색
- - 항목 수, 키 구조, 예시 샘플 확인
- - 감정값 통계 (V-A-D-S)
- - 사용자 상호작용 통계
- - 태그 데이터 샘플 확인
-============================================================
-"""
+# ==========================================================
+# 🎵 NVify - Last.fm 원시 데이터 탐색 및 분석 (EDA)
+# ==========================================================
+#
+# 📝 설명:
+#   Last.fm 원시 JSON 데이터셋(감정 피처, 사용자 상호작용, 태그 구조)의 
+#   구조, 분포, 통계적 특성을 탐색하고 시각화합니다. 이 과정은 후속 전처리 및
+#   모델 학습을 위한 데이터 이해도를 높이는 데 필수적입니다.
+#
+# ----------------------------------------------------------
+# 📁 파일 정보
+# ----------------------------------------------------------
+#
+# ➡️ 입력 파일 (Input):
+#   - item_vads.json: 트랙 VADS(Valence, Arousal, Dominance, Sentiment) 점수
+#   - top_tracks.json: 사용자별 Top Tracks 청취 기록
+#   - item_tags.json (선택): 항목별 사용자 부여 태그 요약
+#
+# ⬅️ 출력 파일 (Output):
+#   - lastfm_vads_summary.csv: VADS 피처의 기술 통계 요약
+#   - lastfm_user_track_summary.csv: 사용자별 트랙 수 통계 요약
+#   - [Images]: VADS 분포 및 상관관계, 사용자 상호작용 분포 히스토그램 (실행 시)
+#
+# 🛠️ 주요 라이브러리:
+#   - pandas, matplotlib, seaborn, json
+#
+# ==========================================================
+# 1. 설정 및 초기화
+# ==========================================================
 
 import json
 import pandas as pd
@@ -25,9 +36,12 @@ import os
 
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ==========================================================
+# 2. 핵심 로직: 데이터 탐색 (EDA)
+# ==========================================================
 
 # ------------------------------------------------------------
-# 1️⃣ item_vads.json — 감정 피처
+# 2.1 item_vads.json — 감정 피처
 # ------------------------------------------------------------
 vads_path = os.path.join(DATA_DIR, "item_vads.json")
 print(f"[INFO] Loading {vads_path}...")
@@ -60,23 +74,23 @@ print(vads_df.head(5))
 print("\n[INFO] VADS Descriptive Statistics:")
 print(vads_df.describe().T)
 
-# 시각화
+# 시각화 (실행 환경에서만 작동)
 for col in ["valence", "arousal", "dominance", "sentiment"]:
     plt.figure(figsize=(6, 4))
     sns.histplot(vads_df[col], bins=30, kde=True)
     plt.title(f"{col} distribution")
     plt.tight_layout()
-    plt.show()
+    # plt.show() # 문서화 목적상 주석 처리
 
 plt.figure(figsize=(6, 5))
 sns.heatmap(vads_df[["valence", "arousal", "dominance", "sentiment"]].corr(), annot=True, cmap="coolwarm")
 plt.title("VADS Feature Correlation")
 plt.tight_layout()
-plt.show()
+# plt.show() # 문서화 목적상 주석 처리
 
 
 # ------------------------------------------------------------
-# 2️⃣ top_tracks.json — 사용자 상호작용
+# 2.2 top_tracks.json — 사용자 상호작용
 # ------------------------------------------------------------
 top_path = os.path.join(DATA_DIR, "top_tracks.json")
 print(f"\n[INFO] Loading {top_path}...")
@@ -95,11 +109,11 @@ plt.title("Top Tracks per User Distribution")
 plt.xlabel("# of Tracks per User")
 plt.ylabel("Count")
 plt.tight_layout()
-plt.show()
+# plt.show() # 문서화 목적상 주석 처리
 
 
 # ------------------------------------------------------------
-# 3️⃣ item_tags.json — 태그 구조 미리보기
+# 2.3 item_tags.json — 태그 구조 미리보기
 # ------------------------------------------------------------
 tag_path = os.path.join(DATA_DIR, "item_tags.json")
 if os.path.exists(tag_path):
@@ -110,15 +124,18 @@ if os.path.exists(tag_path):
     for k in tag_data.keys():
         print(f"  - {k}: {len(tag_data[k])} entries")
     print("\n[Sample Artist Tags]")
-    print(list(tag_data.get("Artists", list(tag_data.values())[0]).items())[:5])
+    # tag_data가 비어있지 않다면 샘플을 출력합니다.
+    if tag_data:
+        first_key_data = list(tag_data.values())[0] 
+        print(list(first_key_data.items())[:5])
 else:
     print("\n[WARN] item_tags.json not found, skipping tag analysis.")
 
-# ------------------------------------------------------------
-# 4️⃣ Summary 저장
-# ------------------------------------------------------------
+# ==========================================================
+# 3. 메인 실행 로직: Summary 저장
+# ==========================================================
 
 vads_df.describe().to_csv("lastfm_vads_summary.csv", encoding="utf-8-sig")
 pd.Series(user_counts).describe().to_csv("lastfm_user_track_summary.csv", encoding="utf-8-sig")
 
-print("\nEDA 완료 — 요약 저장: data/summary/")
+print("\nEDA 완료 — 요약 저장: lastfm_vads_summary.csv, lastfm_user_track_summary.csv")
