@@ -1,0 +1,11 @@
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  artifacts_dir: data/artifacts
+
+serve:
+  top_k: 10
+
+defaults:
+  valence: 0.5
+  energy: 0.5
