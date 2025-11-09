@@ -1,7 +1,8 @@
-numpy
+numpy<2
 pandas
 scikit-learn
 scikit-surprise
 lightgbm
 tqdm
 pyyaml
+spotipy

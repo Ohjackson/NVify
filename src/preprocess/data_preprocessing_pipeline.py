@@ -33,7 +33,9 @@ def preprocess_music_info(path_in, path_out):
     print("원본 shape:", df.shape)
 
     # 주요 피처만 선택
-    df = df[['track_id', 'name', 'artist', 'valence', 'energy']]
+    keep_cols = ['track_id', 'spotify_id', 'name', 'artist', 'valence', 'energy']
+    available_cols = [col for col in keep_cols if col in df.columns]
+    df = df[available_cols]
 
     # 결측치 제거
     df = df.dropna(subset=['valence', 'energy'])

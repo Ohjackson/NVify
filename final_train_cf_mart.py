@@ -36,10 +36,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--user_emotion_valence", type=float, default=0.5, help="사용자 Valence(가상)")
     parser.add_argument("--user_emotion_energy", type=float, default=0.5, help="사용자 Energy(가상)")
     parser.add_argument("--skip_ranking", action="store_true", help="LambdaMART 학습 건너뛰기")
+    parser.add_argument("--max_rows", type=int, default=0, help="학습에 사용할 최대 행 수 (0이면 전체)")
     return parser.parse_args()
 
 
-def load_dataset(path: Path, tracks_path: Path | None = None) -> pd.DataFrame:
+def load_dataset(path: Path, tracks_path: Path | None = None, max_rows: int = 0, random_state: int = 42) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"입력 CSV를 찾을 수 없습니다: {path}")
     df = pd.read_csv(path)
@@ -66,6 +67,9 @@ def load_dataset(path: Path, tracks_path: Path | None = None) -> pd.DataFrame:
     if missing_emotion:
         raise ValueError(f"Could not resolve emotion columns: {missing_emotion}")
 
+    if max_rows and len(df) > max_rows:
+        df = df.sample(n=max_rows, random_state=random_state)
+        LOGGER.info("데이터 샘플링 적용 (행=%d)", len(df))
     LOGGER.info("데이터 로드 완료 %s (행=%d)", path, len(df))
     return df
 
@@ -150,7 +154,7 @@ def main():
     data_path = Path(args.input_csv)
     artifacts_dir = Path(args.artifacts_dir)
     tracks_path = Path(args.tracks_csv) if args.tracks_csv else None
-    df = load_dataset(data_path, tracks_path)
+    df = load_dataset(data_path, tracks_path, max_rows=args.max_rows, random_state=args.random_state)
 
     rating_scale = (args.rating_scale_min, args.rating_scale_max)
     cf_model = train_cf_model(df, rating_scale, args.n_factors, args.n_epochs, args.random_state)

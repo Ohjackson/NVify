@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import runpy
+import shutil
 import sys
 from contextlib import contextmanager
 from importlib import import_module
@@ -41,6 +42,47 @@ def _ensure_dirs(cfg: dict) -> None:
         LOGGER.debug("디렉터리 보장: %s", target)
 
 
+def _prepare_raw_inputs(cfg: dict) -> None:
+    """Copy user-provided raw CSVs into locations expected by legacy scripts."""
+
+    raw_dir = Path(cfg["paths"]["raw_dir"])
+    data_root = REPO / "data"
+    data_root.mkdir(exist_ok=True)
+
+    mapping = {
+        "Music Info.csv": "music_info.csv",
+        "music_info.csv": "music_info.csv",
+        "User Listening History.csv": "user_listening_history.csv",
+        "user_listening_history.csv": "user_listening_history.csv",
+    }
+
+    for src_name, dest_name in mapping.items():
+        src = raw_dir / src_name
+        if not src.exists():
+            continue
+        dest = data_root / dest_name
+        shutil.copy2(src, dest)
+        LOGGER.info("RAW → DATA 복사: %s → %s", src, dest)
+
+
+def _sync_processed_outputs(cfg: dict) -> None:
+    data_root = REPO / "data"
+    processed_dir = Path(cfg["paths"]["processed_dir"])
+
+    mapping = {
+        data_root / "music_emotion_clean.csv": processed_dir / "tracks.csv",
+        data_root / "user_ratings_normalized.csv": processed_dir / "interactions.csv",
+        data_root / "hybrid_preprocessed.csv": processed_dir / "hybrid_drop1.csv",
+    }
+
+    for src, dest in mapping.items():
+        if not src.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        LOGGER.info("전처리 산출물 복사: %s → %s", src, dest)
+
+
 def _safe_import(module_name: str):
     try:
         return import_module(module_name)
@@ -51,12 +93,24 @@ def _safe_import(module_name: str):
     return None
 
 
-def _run_script(script_path: Path) -> None:
+def _run_script(script_path: Path, ignore_errors: bool = False) -> None:
     LOGGER.info("스크립트 폴백 실행: %s", script_path)
-    runpy.run_path(str(script_path), run_name="__main__")
+    try:
+        runpy.run_path(str(script_path), run_name="__main__")
+    except ModuleNotFoundError as exc:
+        if ignore_errors:
+            LOGGER.warning("의존성 부재로 스크립트를 건너뜁니다 (%s): %s", script_path, exc)
+            return
+        raise
 
 
-def _exec_module_or_script(module_name: str, script_path: Path, func_candidates=("main", "run"), kwargs=None) -> None:
+def _exec_module_or_script(
+    module_name: str,
+    script_path: Path,
+    func_candidates=("main", "run"),
+    kwargs=None,
+    ignore_errors: bool = False,
+) -> None:
     module = _safe_import(module_name)
     if module:
         for candidate in func_candidates:
@@ -68,51 +122,72 @@ def _exec_module_or_script(module_name: str, script_path: Path, func_candidates=
                 else:
                     entry()
                 return
-    _run_script(script_path)
+    _run_script(script_path, ignore_errors=ignore_errors)
 
 
 def _run_preprocess(cfg: dict) -> None:
     processed_dir = Path(cfg["paths"]["processed_dir"])
     inter_path = processed_dir / "interactions.csv"
     track_path = processed_dir / "tracks.csv"
+    alt_inter = REPO / "data" / "user_ratings_normalized.csv"
+    alt_track = REPO / "data" / "music_emotion_clean.csv"
 
-    if inter_path.exists() and track_path.exists():
+    def _outputs_ready() -> bool:
+        return (inter_path.exists() and track_path.exists()) or (alt_inter.exists() and alt_track.exists())
+
+    if _outputs_ready():
         LOGGER.info("전처리 산출물이 이미 있습니다. 전처리 건너뜁니다.")
         return
 
     pipeline_path = REPO / "src" / "preprocess" / "data_preprocessing_pipeline.py"
     module = _safe_import("src.preprocess.data_preprocessing_pipeline")
     if module:
+        invoked = False
         for candidate in ("main", "run"):
             entry = getattr(module, candidate, None)
             if callable(entry):
                 LOGGER.info("전처리 파이프라인 실행: %s.%s", module.__name__, candidate)
                 entry()
+                invoked = True
                 break
-        if inter_path.exists() and track_path.exists():
-            return
+        if not invoked:
+            _run_script(pipeline_path)
     else:
         _run_script(pipeline_path)
-        if inter_path.exists() and track_path.exists():
-            return
+
+    if _outputs_ready():
+        return
 
     steps = [
-        ("src.preprocess.data_pull", REPO / "src" / "preprocess" / "data_pull.py"),
-        ("src.preprocess.lastfm_preprocessing", REPO / "src" / "preprocess" / "lastfm_preprocessing.py"),
-        ("src.preprocess.merge_preprocessed", REPO / "src" / "preprocess" / "merge_preprocessed.py"),
-        ("src.preprocess.data_preprocessing_drop1", REPO / "src" / "preprocess" / "data_preprocessing_drop1.py"),
+        ("src.preprocess.data_pull", REPO / "src" / "preprocess" / "data_pull.py", True),
+        ("src.preprocess.lastfm_preprocessing", REPO / "src" / "preprocess" / "lastfm_preprocessing.py", True),
+        ("src.preprocess.merge_preprocessed", REPO / "src" / "preprocess" / "merge_preprocessed.py", False),
+        ("src.preprocess.data_preprocessing_drop1", REPO / "src" / "preprocess" / "data_preprocessing_drop1.py", False),
     ]
 
-    for module_name, script_path in steps:
-        if inter_path.exists() and track_path.exists():
+    for module_name, script_path, ignore_errors in steps:
+        if _outputs_ready():
             break
-        _exec_module_or_script(module_name, script_path)
+        _exec_module_or_script(module_name, script_path, ignore_errors=ignore_errors)
 
-    if not (inter_path.exists() and track_path.exists()):
+    if not _outputs_ready():
         LOGGER.warning("전처리 산출물이 생성되지 않았습니다: %s, %s", inter_path, track_path)
 
 
 def _run_mapping(cfg: dict) -> None:
+    processed_dir = Path(cfg["paths"]["processed_dir"])
+    tracks_csv = processed_dir / "tracks.csv"
+    try:
+        if tracks_csv.exists():
+            import pandas as pd  # local import to avoid heavy dependency at module load
+
+            header = pd.read_csv(tracks_csv, nrows=0)
+            if "spotify_id" in header.columns:
+                LOGGER.info("tracks.csv에 spotify_id 컬럼이 이미 있습니다. 매핑 단계를 건너뜁니다.")
+                return
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.warning("Spotify ID 확인 중 오류: %s", exc)
+
     merge_path = REPO / "src" / "mapping" / "merge_spotify_id.py"
     map_path = REPO / "src" / "mapping" / "map_spotify_ids.py"
 
@@ -187,7 +262,9 @@ def main():
     cfg = _load_config(cfg_path)
 
     _ensure_dirs(cfg)
+    _prepare_raw_inputs(cfg)
     _run_preprocess(cfg)
+    _sync_processed_outputs(cfg)
     _run_mapping(cfg)
 
     model = load_model(cfg)

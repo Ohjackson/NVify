@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import pickle
 import runpy
 import sys
@@ -39,9 +40,27 @@ def _temporary_argv(argv):
         sys.argv = original
 
 
+@contextmanager
+def _temporary_env(envs):
+    original = {key: os.environ.get(key) for key in envs}
+    os.environ.update(envs)
+    try:
+        yield
+    finally:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _select_input_csv(cfg: dict) -> Optional[Path]:
     processed_dir = Path(cfg["paths"]["processed_dir"])
-    candidates = [processed_dir / "hybrid_drop1.csv", processed_dir / "interactions.csv"]
+    candidates = [
+        processed_dir / "hybrid_drop1_sample.csv",
+        processed_dir / "hybrid_drop1.csv",
+        processed_dir / "interactions.csv",
+    ]
     for path in candidates:
         if path.exists():
             return path
@@ -63,9 +82,17 @@ def _run_training_script(repo_root: Path, cfg: dict) -> None:
         argv.extend(["--input_csv", str(input_csv)])
     if tracks_csv.exists():
         argv.extend(["--tracks_csv", str(tracks_csv)])
+    max_rows = os.environ.get("NVIFY_TRAIN_MAX_ROWS", "500000")
+    if max_rows and str(max_rows) != "0":
+        argv.extend(["--max_rows", str(max_rows)])
 
     LOGGER.info("CF 학습 스크립트 실행: %s", " ".join(argv))
-    with _temporary_argv(argv):
+    env_overrides = {
+        "SURPRISE_DATA_FOLDER": str(artifacts_dir / ".surprise_data"),
+        "LIGHTGBM_EXEC": "cpu",
+    }
+
+    with _temporary_env(env_overrides), _temporary_argv(argv):
         runpy.run_path(str(candidate), run_name="__main__")
 
 
