@@ -123,6 +123,11 @@ serve:
 defaults:
   valence: 0.5
   energy: 0.5
+
+train:
+  always_train: true      # always (re)train when running main
+  skip_ranking: true      # train CF(SVD) only by default for speed
+  max_rows: 50000         # cap training rows (0 = use all)
 ```
 
 ---

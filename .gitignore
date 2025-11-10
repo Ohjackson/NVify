@@ -1,0 +1,15 @@
+# Data files
+*.csv
+
+# Markdown docs
+*.md
+
+# Bytecode / caches
+__pycache__/
+.pytest_cache/
+.pycache/
+
+# Virtual environments
+.venv/
+venv/
+

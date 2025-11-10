@@ -67,6 +67,15 @@ def _select_input_csv(cfg: dict) -> Optional[Path]:
     return None
 
 
+def _read_train_cfg(cfg: dict):
+    train = cfg.get("train", {}) if isinstance(cfg, dict) else {}
+    return {
+        "always_train": bool(train.get("always_train", False) or os.environ.get("NVIFY_FORCE_TRAIN")),
+        "skip_ranking": bool(train.get("skip_ranking", False) or os.environ.get("NVIFY_SKIP_RANKING")),
+        "max_rows": str(train.get("max_rows", os.environ.get("NVIFY_TRAIN_MAX_ROWS", ""))) or "",
+    }
+
+
 def _run_training_script(repo_root: Path, cfg: dict) -> None:
     candidate = repo_root / TRAINING_SCRIPT_NAME
     if not candidate.exists():
@@ -82,9 +91,11 @@ def _run_training_script(repo_root: Path, cfg: dict) -> None:
         argv.extend(["--input_csv", str(input_csv)])
     if tracks_csv.exists():
         argv.extend(["--tracks_csv", str(tracks_csv)])
-    max_rows = os.environ.get("NVIFY_TRAIN_MAX_ROWS", "500000")
-    if max_rows and str(max_rows) != "0":
-        argv.extend(["--max_rows", str(max_rows)])
+    tcfg = _read_train_cfg(cfg)
+    if tcfg["max_rows"] and tcfg["max_rows"] != "0":
+        argv.extend(["--max_rows", str(tcfg["max_rows"])])
+    if tcfg["skip_ranking"]:
+        argv.append("--skip_ranking")
 
     LOGGER.info("CF 학습 스크립트 실행: %s", " ".join(argv))
     env_overrides = {
@@ -111,7 +122,8 @@ def load_model(cfg: dict):
     candidates = [artifacts_dir / name for name in MODEL_CANDIDATES]
     model_path = _find_first_existing(candidates)
 
-    if model_path is None:
+    tcfg = _read_train_cfg(cfg)
+    if model_path is None or tcfg["always_train"]:
         repo_root = Path(__file__).resolve().parents[2]
         LOGGER.info("CF 모델 아티팩트 없음. 학습 스크립트 실행 시도.")
         _run_training_script(repo_root, cfg)
