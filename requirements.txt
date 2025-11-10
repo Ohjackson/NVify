@@ -5,4 +5,5 @@ scikit-surprise
 lightgbm
 tqdm
 pyyaml
+streamlit
 spotipy
