@@ -1,69 +1,98 @@
-import sys
+from __future__ import annotations
+
 import os
-import pickle
+import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
-import streamlit as st
 import yaml
+from flask import Flask, render_template, request
 
-# Ensure local imports
+# Ensure local imports work (src package)
 REPO = Path(__file__).resolve().parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+# Avoid accidental retraining when serving the app
+os.environ.setdefault("NVIFY_FORCE_TRAIN", "0")
+
 from src.cf.svd_entry_shim import load_model
 
 
-@st.cache_data(show_spinner=False)
 def load_config(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    with path.open("r", encoding="utf-8") as fp:
+        return yaml.safe_load(fp)
 
 
-@st.cache_data(show_spinner=False)
-def read_csv_safe(path: Path, nrows: int | None = None) -> pd.DataFrame:
-    return pd.read_csv(path, nrows=nrows)
+def load_pickle(path: Path):
+    import pickle
+
+    with path.open("rb") as fh:
+        return pickle.load(fh)
 
 
-@st.cache_resource(show_spinner=False)
-def load_pickle_safe(path: Path):
-    with path.open("rb") as f:
-        return pickle.load(f)
+def load_tracks(tracks_path: Path) -> pd.DataFrame:
+    if not tracks_path.exists():
+        raise FileNotFoundError(f"tracks.csv not found at {tracks_path}")
+    df = pd.read_csv(tracks_path)
+    required = {"name", "artist", "valence", "energy"}
+    if not required.issubset(df.columns):
+        missing = required - set(df.columns)
+        raise ValueError(f"tracks.csv missing columns: {sorted(missing)}")
+    # Prefer spotify_id if present, otherwise fallback to track_id
+    id_col = "spotify_id" if "spotify_id" in df.columns else "track_id"
+    cols = [col for col in [id_col, "track_id", "name", "artist", "valence", "energy"] if col in df.columns]
+    df = df[cols].dropna(subset=["name", "artist", "valence", "energy"])
+    return df, id_col
 
 
-def compute_scores(model, user_id: str, tracks_df: pd.DataFrame, id_col: str,
-                   valence: float, energy: float, track_meta_db: dict | None,
-                   interactions_df: pd.DataFrame | None) -> pd.DataFrame:
+def load_interaction_counts(path: Path) -> Optional[Dict[str, int]]:
+    if not path.exists():
+        return None
+    # Only load track_id column to compute counts
+    counts = pd.read_csv(path, usecols=["track_id"])["track_id"].value_counts()
+    return counts.to_dict()
+
+
+def compute_scores(
+    model,
+    user_id: str,
+    tracks_df: pd.DataFrame,
+    id_col: str,
+    valence: float,
+    energy: float,
+    track_meta_db: Optional[dict],
+    interaction_counts: Optional[Dict[str, int]],
+) -> pd.DataFrame:
     df = tracks_df.copy()
     df["user_id"] = user_id
 
-    # CF taste score
-    # Surprise SVD .predict(uid, iid).est
-    ests = []
+    # Taste score from CF model
+    taste_scores: List[float] = []
     for iid in df[id_col].astype(str).tolist():
         try:
             est = model.predict(user_id, iid).est
         except Exception:
             est = 0.0
-        ests.append(est)
-    df["taste_score"] = ests
+        taste_scores.append(est)
+    df["taste_score"] = taste_scores
 
-    # Emotion score: inverse Euclidean distance to (valence, energy)
-    dist = ((df["valence"] - valence) ** 2 + (df["energy"] - energy) ** 2) ** 0.5
-    df["emotion_score"] = 1.0 / (1.0 + dist)
+    # Emotion score (inverse distance)
+    distance = ((df["valence"] - valence) ** 2 + (df["energy"] - energy) ** 2) ** 0.5
+    df["emotion_score"] = 1.0 / (1.0 + distance)
 
     # Novelty score
-    novelty = []
+    novelty: List[float] = []
     if track_meta_db and id_col == "spotify_id":
         for iid in df[id_col].astype(str):
             meta = track_meta_db.get(iid, {})
             cnt = meta.get("total_rating_count", 0)
             novelty.append(1.0 / (cnt + 1.0))
-    elif interactions_df is not None:
-        counts = interactions_df.groupby("track_id").size().to_dict()
-        for iid in df[id_col].astype(str):
-            cnt = counts.get(iid, 0) if id_col == "track_id" else 0
+    elif interaction_counts is not None and "track_id" in df.columns:
+        for iid in df["track_id"].astype(str):
+            cnt = interaction_counts.get(iid, 0)
             novelty.append(1.0 / (cnt + 1.0))
     else:
         novelty = [1.0] * len(df)
@@ -72,98 +101,129 @@ def compute_scores(model, user_id: str, tracks_df: pd.DataFrame, id_col: str,
     return df
 
 
-def main():
-    st.set_page_config(page_title="NVify Recommender", page_icon="🎵", layout="wide")
-    st.title("🎵 NVify: Emotion-Aware Recommender")
-    st.caption("Load trained artifacts (.pkl) and recommend by Valence/Energy")
+def blend_scores(df: pd.DataFrame, ranker) -> pd.DataFrame:
+    if ranker is not None:
+        feats = df[["taste_score", "emotion_score", "novelty_score"]]
+        try:
+            df["predicted_score"] = ranker.predict(feats)
+            return df
+        except Exception:
+            pass
+    df["predicted_score"] = (
+        0.7 * df["taste_score"] + 0.2 * df["emotion_score"] + 0.1 * df["novelty_score"]
+    )
+    return df
 
-    cfg_path = REPO / "config.yaml"
-    if not cfg_path.exists():
-        st.error("config.yaml not found.")
-        st.stop()
-    cfg = load_config(cfg_path)
 
-    processed_dir = REPO / cfg["paths"]["processed_dir"]
-    artifacts_dir = REPO / cfg["paths"]["artifacts_dir"]
+def build_result_rows(df: pd.DataFrame, id_col: str, top_k: int) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    top = df.sort_values("predicted_score", ascending=False).head(top_k)
+    for idx, (_, row) in enumerate(top.iterrows(), start=1):
+        spotify_id = row.get("spotify_id") if id_col == "spotify_id" else None
+        track_link = f"https://open.spotify.com/track/{spotify_id}" if spotify_id else None
+        preview_url = (
+            f"https://open.spotify.com/embed/track/{spotify_id}" if spotify_id else None
+        )
+        rows.append(
+            {
+                "rank": idx,
+                "title": row.get("name", ""),
+                "artist": row.get("artist", ""),
+                "track_url": track_link,
+                "preview_url": preview_url,
+                "taste": row["taste_score"],
+                "emotion": row["emotion_score"],
+                "novelty": row["novelty_score"],
+                "score": row["predicted_score"],
+            }
+        )
+    return rows
 
-    tracks_path = processed_dir / "tracks.csv"
-    interactions_path = processed_dir / "interactions.csv"
 
-    # UI controls
-    with st.sidebar:
-        st.header("Inputs")
-        user_id = st.text_input("User ID", value="u0")
-        valence = st.slider("Valence (0–1)", 0.0, 1.0, float(cfg["defaults"]["valence"]))
-        energy = st.slider("Energy (0–1)", 0.0, 1.0, float(cfg["defaults"]["energy"]))
-        top_k = st.slider("Top-K", 1, 50, int(cfg["serve"]["top_k"]))
-        do_recommend = st.button("Recommend")
+# Bootstrap shared assets
+CFG = load_config(REPO / "config.yaml")
+PROCESSED_DIR = REPO / CFG["paths"]["processed_dir"]
+ARTIFACTS_DIR = REPO / CFG["paths"]["artifacts_dir"]
+TRACKS_PATH = PROCESSED_DIR / "tracks.csv"
+INTERACTIONS_PATH = PROCESSED_DIR / "interactions.csv"
+META_PATH = ARTIFACTS_DIR / "track_meta_db.pkl"
+RANKING_PATH = ARTIFACTS_DIR / "ranking_model_final.pkl"
 
-    # Load artifacts
-    with st.spinner("Loading artifacts..."):
-        model = load_model(cfg)
-        if model is None:
-            st.error("CF model not found or failed to load. Please run training first.")
-            st.stop()
+MODEL = load_model(CFG)
+if MODEL is None:
+    raise RuntimeError("CF model could not be loaded. Run training first (train.sh).")
 
-        # Optional artifacts
-        cf_path = artifacts_dir / "cf_model_final.pkl"
-        meta_path = artifacts_dir / "track_meta_db.pkl"
-        rank_path = artifacts_dir / "ranking_model_final.pkl"
+TRACKS_DF, ID_COL = load_tracks(TRACKS_PATH)
+INTERACTION_COUNTS = load_interaction_counts(INTERACTIONS_PATH)
+TRACK_META_DB = load_pickle(META_PATH) if META_PATH.exists() else None
+RANKER = load_pickle(RANKING_PATH) if RANKING_PATH.exists() else None
 
-        track_meta_db = load_pickle_safe(meta_path) if meta_path.exists() else None
-        ranker = load_pickle_safe(rank_path) if rank_path.exists() else None
+app = Flask(__name__)
 
-        if not tracks_path.exists():
-            st.error(f"Tracks CSV not found: {tracks_path}")
-            st.stop()
-        tracks_df = read_csv_safe(tracks_path)
 
-        # Choose id column
-        id_col = "spotify_id" if "spotify_id" in tracks_df.columns else "track_id"
+@app.route("/", methods=["GET", "POST"])
+def index():
+    errors: List[str] = []
+    results: List[Dict[str, Any]] | None = None
 
-        # Minimal columns check
-        needed = [id_col, "name", "artist", "valence", "energy"]
-        missing = [c for c in needed if c not in tracks_df.columns]
-        if missing:
-            st.error(f"tracks.csv missing columns: {missing}")
-            st.stop()
+    default_valence = float(CFG["defaults"]["valence"])
+    default_energy = float(CFG["defaults"]["energy"])
+    default_topk = int(CFG["serve"]["top_k"])
 
-        interactions_df = read_csv_safe(interactions_path) if interactions_path.exists() else None
+    user_id = request.form.get("user_id", "u0")
+    valence_raw = request.form.get("valence", str(default_valence))
+    energy_raw = request.form.get("energy", str(default_energy))
+    topk_raw = request.form.get("top_k", str(default_topk))
 
-    if do_recommend:
-        with st.spinner("Scoring candidates..."):
-            scored = compute_scores(model, user_id, tracks_df[needed], id_col,
-                                    valence, energy, track_meta_db, interactions_df)
+    if request.method == "POST":
+        try:
+            valence = max(0.0, min(1.0, float(valence_raw)))
+        except ValueError:
+            errors.append("Valence must be a number between 0 and 1.")
+            valence = default_valence
+        try:
+            energy = max(0.0, min(1.0, float(energy_raw)))
+        except ValueError:
+            errors.append("Energy must be a number between 0 and 1.")
+            energy = default_energy
+        try:
+            top_k = max(1, int(topk_raw))
+        except ValueError:
+            errors.append("Top-K must be an integer ≥ 1.")
+            top_k = default_topk
 
-            # If ranker exists, predict; otherwise combine scores simply
-            if ranker is not None:
-                X = scored[["taste_score", "emotion_score", "novelty_score"]]
-                try:
-                    scored["predicted_score"] = ranker.predict(X)
-                except Exception:
-                    # Fallback simple blend
-                    scored["predicted_score"] = (
-                        0.7 * scored["taste_score"] + 0.2 * scored["emotion_score"] + 0.1 * scored["novelty_score"]
-                    )
-            else:
-                scored["predicted_score"] = (
-                    0.7 * scored["taste_score"] + 0.2 * scored["emotion_score"] + 0.1 * scored["novelty_score"]
-                )
+        if not user_id.strip():
+            errors.append("User ID cannot be empty.")
 
-            out_cols = ["name", "artist", "predicted_score", "taste_score", "emotion_score", "novelty_score", id_col]
-            recs = scored.sort_values("predicted_score", ascending=False)[out_cols].head(top_k)
+        if not errors:
+            scored = compute_scores(
+                MODEL,
+                user_id.strip(),
+                TRACKS_DF[[col for col in TRACKS_DF.columns if col in {ID_COL, "track_id", "name", "artist", "valence", "energy"}]],
+                ID_COL,
+                valence,
+                energy,
+                TRACK_META_DB,
+                INTERACTION_COUNTS,
+            )
+            scored = blend_scores(scored, RANKER)
+            results = build_result_rows(scored, ID_COL, top_k)
+    else:
+        valence = default_valence
+        energy = default_energy
+        top_k = default_topk
 
-        st.subheader("Recommendations")
-        # Add Spotify link if possible
-        if id_col == "spotify_id":
-            recs = recs.copy()
-            recs["spotify_link"] = recs[id_col].apply(lambda x: f"https://open.spotify.com/track/{x}")
-        st.dataframe(recs, use_container_width=True)
-
-        csv_bytes = recs.to_csv(index=False).encode("utf-8")
-        st.download_button("Download CSV", data=csv_bytes, file_name="recommendations.csv", mime="text/csv")
+    return render_template(
+        "index.html",
+        user_id=user_id,
+        valence=valence,
+        energy=energy,
+        top_k=top_k,
+        errors=errors,
+        results=results,
+        has_spotify=(ID_COL == "spotify_id"),
+    )
 
 
 if __name__ == "__main__":
-    main()
-
+    app.run(debug=False)

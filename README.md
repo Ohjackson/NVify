@@ -8,7 +8,8 @@ NVify combines emotional features (Valence/Energy) with user listening logs to r
 - Preprocessing: normalize two raw CSVs into standard processed artifacts under `data/processed/`
 - Mapping (optional): run Spotify ID mapping if `tracks.csv` lacks `spotify_id`
 - CF (SVD): train or load via adapters around the original notebook/scripts
-- Recommend/Evaluate: reuse existing `recommender.py`, `recommend.py`, `recommend_evaluate.py`
+- Web app: Flask UI (`python app.py`) for interactive Valence/Energy-based recommendations with Spotify preview embeds
+- Recommend/Evaluate: reuse existing `recommender.py`, `recommend.py`, `recommend_evaluate.py` for CLI batch runs
 
 ---
 
@@ -86,6 +87,14 @@ Artifacts
 - Models: `data/artifacts/{cf_model_final.pkl, track_meta_db.pkl, ranking_model_final.pkl}`
 - Output: `data/artifacts/recommendations.csv`
 
+### Web App (HTML)
+```
+python app.py
+```
+- Opens Flask server on http://127.0.0.1:5000 (see console for host/port)
+- Enter `user_id`, Valence, Energy, Top-K → submit → see ranked results with Spotify links and preview embeds (if `spotify_id` is available)
+- Set `NVIFY_FORCE_TRAIN=0` or `train.always_train: false` to prevent retraining when launching the app
+
 ---
 
 ## Pipeline Overview
@@ -125,7 +134,7 @@ defaults:
   energy: 0.5
 
 train:
-  always_train: true      # always (re)train when running main
+  always_train: false     # retrain only when explicitly requested (e.g., train.sh)
   skip_ranking: true      # train CF(SVD) only by default for speed
   max_rows: 50000         # cap training rows (0 = use all)
 ```

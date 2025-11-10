@@ -11,6 +11,6 @@ defaults:
   energy: 0.5
 
 train:
-  always_train: true       # main 실행 시 항상 학습 시도 (모델이 있어도 재학습)
+  always_train: false      # 필요 시에만 재학습 (train.sh로 제어)
   skip_ranking: true       # 기본은 CF(SVD)만 학습해 빠르게 준비
   max_rows: 50000          # 대용량 방지용 학습 샘플 상한(0이면 전체)

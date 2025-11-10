@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>NVify · Emotion-Aware Recommender</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    /* ===== CSS Variables ===== */
+    :root {
+      color-scheme: dark;
+      --bg: #050816;
+      --surface: rgba(9, 13, 28, 0.9);
+      --panel: rgba(15, 23, 42, 0.85);
+      --elev: rgba(22, 31, 63, 0.5);
+      --text: #e5e9f5;
+      --muted: #b9c0d4;
+      --border: rgba(255, 255, 255, 0.08);
+      --accent: #34d399; /* will live-update by sliders */
+      --accent-2: #60a5fa; /* will live-update by sliders */
+      --ok: #22c55e; 
+      --warn: #f59e0b; 
+      --danger: #ef4444;
+      --shadow-lg: 0 40px 80px rgba(2, 6, 23, 0.75);
+      --radius-xl: 20px;
+    }
+
+    /* Background */
+    body {
+      margin: 0; min-height: 100vh; font-family: 'Outfit', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(96, 165, 250, 0.22), transparent 60%),
+        radial-gradient(900px 500px at 90% -20%, rgba(52, 211, 153, 0.18), transparent 55%),
+        radial-gradient(circle at top, #1b1844 0%, var(--bg) 55%);
+      display: grid; grid-template-rows: auto 1fr auto; gap: 28px;
+    }
+
+    /* Top Nav */
+    .nav {
+      position: sticky; top: 0; z-index: 3; backdrop-filter: saturate(160%) blur(8px);
+      background: linear-gradient(180deg, rgba(2, 6, 23, 0.65), rgba(2, 6, 23, 0.1));
+      border-bottom: 1px solid var(--border);
+    }
+    .nav__inner { max-width: 1200px; padding: 14px 20px; margin: 0 auto; display:flex; align-items:center; justify-content:space-between; }
+    .brand { display:flex; align-items:center; gap: 12px; font-weight: 700; letter-spacing: .08em; }
+    .brand__logo { width: 36px; height: 36px; border-radius: 10px; background: conic-gradient(from 200deg, var(--accent), var(--accent-2)); box-shadow: 0 8px 24px rgba(0,0,0,.35); display:grid; place-items:center; }
+    .brand__logo svg { width: 22px; height: 22px; opacity: .95; }
+    .nav__actions { display:flex; align-items:center; gap: 10px; }
+    .btn { border: 1px solid var(--border); background: linear-gradient(135deg, rgba(255,255,255,.04), rgba(255,255,255,.02)); color: var(--text); padding: 10px 14px; border-radius: 10px; cursor: pointer; font-weight: 600; }
+    .btn--primary { border: none; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #0b1220; box-shadow: 0 10px 22px rgba(96,165,250,.28); }
+
+    /* Header/Hero */
+    header { text-align: center; padding: 44px 20px 8px; }
+    header h1 { margin: 0 0 10px; font-size: clamp(2.15rem, 4vw, 3.2rem); letter-spacing: .06em; }
+    header p { margin: 0; font-size: clamp(1.05rem, 1.6vw, 1.2rem); color: var(--muted); }
+
+    /* Main Card */
+    main { max-width: 1200px; width: min(1200px, 92vw); margin: 0 auto 36px; background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow-lg); position: relative; overflow: clip; }
+    .card__glow { position:absolute; inset:-1px; pointer-events:none; background: radial-gradient(700px 120px at 50% -40px, rgba(96,165,250,.18), transparent 60%); }
+    .content { padding: 26px; }
+
+    /* Form */
+    form { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px 18px; align-items: end; }
+    .field { grid-column: span 12; background: rgba(4, 6, 20, 0.55); border: 1px solid rgba(255,255,255,.06); border-radius: 16px; padding: 12px 14px; }
+    .field label { display:block; color: #cbd5f5; font-size: .95rem; letter-spacing:.02em; margin-bottom:6px; }
+    .text-input, .number-input { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(255,255,255,.08); background: rgba(3,7,18,.7); color: var(--text); font-size: 1.05rem; }
+    .text-input:focus, .number-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+
+    /* Range (custom) */
+    .range-wrap { position: relative; display:grid; grid-template-columns: 1fr auto; gap: 10px; align-items:center; }
+    input[type="range"] { -webkit-appearance: none; appearance: none; height: 10px; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); outline: none; box-shadow: inset 0 0 0 1px rgba(255,255,255,.1); }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 22px; height: 22px; border-radius: 50%; background: #0b1220; border: 2px solid #fff; box-shadow: 0 6px 14px rgba(0,0,0,.35), 0 0 0 6px color-mix(in srgb, var(--accent) 32%, transparent); cursor: grab; }
+    input[type="range"]:active::-webkit-slider-thumb { cursor: grabbing; }
+    .range-value { width: 72px; text-align:center; font-weight: 700; font-size: 1.05rem; color: var(--text); padding: 8px 10px; border-radius: 12px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); }
+
+    .field--half { grid-column: span 6; }
+    .field--third { grid-column: span 4; }
+
+    .actions { grid-column: 1 / -1; display:flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
+    .submit-btn { padding: 14px 18px; border-radius: 14px; font-weight: 800; letter-spacing:.06em; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color:#0b1220; border: none; cursor: pointer; transition: transform .18s ease, box-shadow .18s ease; }
+    .submit-btn:hover { transform: translateY(-1.5px); box-shadow: 0 12px 22px rgba(96,165,250,.35); }
+
+    .ghost-btn { background: transparent; border: 1px solid var(--border); color: var(--text); padding: 12px 14px; border-radius: 12px; font-weight: 600; cursor: pointer; }
+
+    /* Errors / Toast */
+    .errors { background: rgba(239, 68, 68, 0.15); color: #fecaca; border-radius: 16px; padding: 12px 14px; border: 1px solid rgba(239, 68, 68, 0.35); margin: 14px 0 0; font-size: 1.05rem; }
+    .errors div { display:flex; gap:8px; align-items:center; }
+
+    /* Results */
+    h2 { margin: 18px 0 12px; font-size: 1.6rem; letter-spacing:.04em; }
+    .table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 18px; background: rgba(10, 16, 36, .5); border: 1px solid var(--border); }
+    .table th, .table td { padding: 14px 16px; text-align: left; border-bottom: 1px solid rgba(255,255,255,.05); font-size: 1.02rem; vertical-align: top; }
+    .table th { font-size: .86rem; letter-spacing:.12em; text-transform: uppercase; color: #94a3b8; background: rgba(15, 23, 42, 0.9); position: sticky; top: 0; z-index: 1; }
+    .table tr:hover td { background: rgba(255,255,255,.03); }
+
+    .title { font-weight: 700; font-size: 1.16rem; }
+    .muted { color: var(--muted); }
+
+    .scoregrid { display:grid; grid-template-columns: 80px 1fr; gap: 6px 10px; align-items:center; max-width: 420px; }
+    .bar { position: relative; height: 9px; border-radius: 10px; background: rgba(255,255,255,.08); overflow: hidden; }
+    .bar::before { content: ""; position:absolute; inset:0; width: var(--p, 0%); background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: inherit; }
+    .scoregrid .k { color:#9fb0c9; font-size: .9rem; text-transform: uppercase; letter-spacing:.08em; }
+
+    /* Preview iframe */
+    .preview-iframe { width: 100%; min-height: 140px; border-radius: 14px; border: none; background: #0f172a; }
+
+    /* Empty state */
+    .empty { border: 1px dashed var(--border); border-radius: 16px; padding: 28px; text-align: center; color: var(--muted); background: rgba(255,255,255,.03); }
+
+    /* Footer */
+    footer { color: #9db0cf; text-align: center; padding: 12px 16px 28px; font-size: .95rem; }
+
+    /* Responsive */
+    @media (max-width: 920px) {
+      .field--half { grid-column: span 12; }
+      .field--third { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+  <!-- NAV -->
+  <nav class="nav">
+    <div class="nav__inner">
+      <div class="brand" aria-label="NVify">
+        <div class="brand__logo" aria-hidden="true">
+          <!-- simple waveform icon -->
+          <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h2m2 0h2m2 0h2m2 0h2m2 0h2M7 12V9m4 3V6m4 6V4m4 8V7" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <span>NVify</span>
+      </div>
+      <div class="nav__actions">
+        <button class="btn" id="shareBtn" type="button" title="현재 값을 링크로 공유">Share</button>
+        <button class="btn" id="resetBtn" type="button" title="슬라이더와 입력 초기화">Reset</button>
+        <button class="btn btn--primary" type="submit" form="recoForm">Generate</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <header>
+    <h1>Emotion‑Aware Recommender</h1>
+    <p>Fine-tune your current vibe with the valence and energy sliders.</p>
+  </header>
+
+  <!-- MAIN CARD -->
+  <main>
+    <div class="card__glow"></div>
+    <div class="content">
+      <form id="recoForm" method="post">
+        <!-- User ID -->
+        <div class="field field--third">
+          <label for="user_id">User ID</label>
+          <input id="user_id" class="text-input" type="text" name="user_id" value="{{ user_id }}" placeholder="e.g. b80344d0..." required />
+        </div>
+        <!-- Top K -->
+        <div class="field field--third">
+          <label for="top_k">Top K</label>
+          <input id="top_k" class="number-input" type="number" min="1" name="top_k" value="{{ top_k }}" />
+        </div>
+        <!-- Valence -->
+        <div class="field field--half">
+          <label for="valence">Valence (0–1)</label>
+          <div class="range-wrap">
+            <input id="valence" type="range" min="0" max="1" step="0.01" name="valence" value="{{ valence }}" />
+            <output class="range-value" id="valenceOut">{{ '%.2f'|format(valence) }}</output>
+          </div>
+        </div>
+        <!-- Energy -->
+        <div class="field field--half">
+          <label for="energy">Energy (0–1)</label>
+          <div class="range-wrap">
+            <input id="energy" type="range" min="0" max="1" step="0.01" name="energy" value="{{ energy }}" />
+            <output class="range-value" id="energyOut">{{ '%.2f'|format(energy) }}</output>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+          <button type="submit" class="submit-btn">Generate Recommendations</button>
+          <button type="button" class="ghost-btn" id="presetChill">Apply Preset: Chill</button>
+          <button type="button" class="ghost-btn" id="presetParty">Apply Preset: Party</button>
+        </div>
+
+        {% if errors %}
+        <div class="errors" role="alert" aria-live="polite">
+          {% for err in errors %}
+            <div>⚠️ {{ err }}</div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </form>
+
+      {% if results %}
+      <h2>Top Picks</h2>
+      <table class="table" role="table">
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Track</th>
+            <th scope="col">Scores</th>
+            {% if has_spotify %}<th scope="col">Preview</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in results %}
+          <tr>
+            <td>{{ row.rank }}</td>
+            <td>
+              <div class="title">{{ row.title }}</div>
+              <div class="muted">{{ row.artist }}</div>
+              {% if row.track_url %}
+                <div style="margin-top:6px">
+                  <a href="{{ row.track_url }}" target="_blank" rel="noopener">Open on Spotify ↗</a>
+                </div>
+              {% endif %}
+            </td>
+            <td>
+              <div class="scoregrid">
+                <div class="k">Score</div>
+                <div class="bar" style="--p: {{ '%.0f'|format(row.score*100) }}%" title="{{ '%.3f'|format(row.score) }}"></div>
+                <div class="k">Taste</div>
+                <div class="bar" style="--p: {{ '%.0f'|format(row.taste*100) }}%" title="{{ '%.3f'|format(row.taste) }}"></div>
+                <div class="k">Emotion</div>
+                <div class="bar" style="--p: {{ '%.0f'|format(row.emotion*100) }}%" title="{{ '%.3f'|format(row.emotion) }}"></div>
+                <div class="k">Novelty</div>
+                <div class="bar" style="--p: {{ '%.0f'|format(row.novelty*100) }}%" title="{{ '%.3f'|format(row.novelty) }}"></div>
+              </div>
+            </td>
+            {% if has_spotify %}
+            <td>
+              {% if row.preview_url %}
+              <iframe class="preview-iframe" src="{{ row.preview_url }}" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" title="Preview: {{ row.title }}"></iframe>
+              {% else %}
+              <em class="muted">No preview available</em>
+              {% endif %}
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% elif request.method == 'POST' and not errors %}
+      <div class="empty">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style="opacity:.7">
+          <path d="M3 18v-6a2 2 0 012-2h3l2-3h4l2 3h3a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.7"/>
+        </svg>
+        <div style="margin-top:8px">추천 결과가 없어요. 슬라이더 값을 바꿔 다시 시도해 보세요.</div>
+      </div>
+      {% endif %}
+    </div>
+  </main>
+
+  <footer>
+    <small>© {{ now().year if now else '2025' }} NVify — Emotion‑aware music that meets your mood.</small>
+  </footer>
+
+  <script>
+    // ===== Helper: clamp to [0,1] =====
+    const clamp01 = (v) => Math.min(1, Math.max(0, Number(v)));
+
+    function updateThemeFromSliders() {
+      const val = clamp01(document.getElementById('valence')?.value || 0.5);
+      const eng = clamp01(document.getElementById('energy')?.value || 0.5);
+      // Map valence to hue (sad~happy = 260° -> 150°), energy to saturation/alpha
+      const hueA = 150 + (1 - val) * 110; // 150..260
+      const hueB = 200 - (val - 0.5) * 120; // slight shift
+      const sat = 70 + eng * 20; // 70..90
+      const lgt = 50 + eng * 8; // 50..58
+      const a = `hsl(${hueA.toFixed(0)} ${sat}% ${lgt}%)`;
+      const b = `hsl(${hueB.toFixed(0)} ${Math.min(98, sat + 4)}% ${Math.max(45, lgt - 6)}%)`;
+      document.documentElement.style.setProperty('--accent', a);
+      document.documentElement.style.setProperty('--accent-2', b);
+    }
+
+    function wireRangeOutput(id, outId) {
+      const el = document.getElementById(id);
+      const out = document.getElementById(outId);
+      if (!el || !out) return;
+      const sync = () => { out.value = Number(el.value).toFixed(2); updateThemeFromSliders(); };
+      el.addEventListener('input', sync); el.addEventListener('change', sync); sync();
+    }
+
+    function copyShareLink() {
+      const params = new URLSearchParams();
+      const uid = document.getElementById('user_id')?.value?.trim();
+      const k = document.getElementById('top_k')?.value;
+      const v = document.getElementById('valence')?.value;
+      const e = document.getElementById('energy')?.value;
+      if (uid) params.set('user_id', uid);
+      if (k) params.set('top_k', k);
+      if (v) params.set('valence', v);
+      if (e) params.set('energy', e);
+      const share = location.origin + location.pathname + '?' + params.toString();
+      navigator.clipboard.writeText(share).then(() => toast('현재 설정 링크가 복사되었습니다.'));
+    }
+
+    function toast(msg) {
+      const t = document.createElement('div');
+      t.textContent = msg;
+      t.style.position = 'fixed'; t.style.left = '50%'; t.style.bottom = '26px'; t.style.transform = 'translateX(-50%)';
+      t.style.background = 'linear-gradient(135deg, var(--accent), var(--accent-2))';
+      t.style.color = '#0b1220'; t.style.padding = '10px 14px'; t.style.borderRadius = '12px'; t.style.boxShadow = '0 10px 22px rgba(0,0,0,.35)';
+      t.style.fontWeight = '700'; t.style.zIndex = '50';
+      document.body.appendChild(t);
+      setTimeout(() => { t.style.transition = 'opacity .4s ease, transform .4s ease'; t.style.opacity = '0'; t.style.transform = 'translateX(-50%) translateY(6px)'; }, 1400);
+      setTimeout(() => t.remove(), 1900);
+    }
+
+    // Presets
+    const presets = {
+      chill: { valence: 0.55, energy: 0.25 },
+      party: { valence: 0.85, energy: 0.9 }
+    };
+
+    function applyPreset(name) {
+      const p = presets[name]; if (!p) return;
+      const v = document.getElementById('valence');
+      const e = document.getElementById('energy');
+      v.value = p.valence; e.value = p.energy;
+      document.getElementById('valenceOut').value = p.valence.toFixed(2);
+      document.getElementById('energyOut').value = p.energy.toFixed(2);
+      updateThemeFromSliders();
+      toast(`${name === 'chill' ? 'Chill' : 'Party'} 프리셋 적용됨`);
+    }
+
+    // Loading state on submit
+    const form = document.getElementById('recoForm');
+    form?.addEventListener('submit', (e) => {
+      const btn = form.querySelector('.submit-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; btn.style.opacity = '.85'; }
+    });
+
+    // Wire controls
+    wireRangeOutput('valence', 'valenceOut');
+    wireRangeOutput('energy', 'energyOut');
+    document.getElementById('shareBtn')?.addEventListener('click', copyShareLink);
+    document.getElementById('resetBtn')?.addEventListener('click', () => { form.reset(); wireRangeOutput('valence', 'valenceOut'); wireRangeOutput('energy', 'energyOut'); toast('값이 초기화되었습니다'); });
+    document.getElementById('presetChill')?.addEventListener('click', () => applyPreset('chill'));
+    document.getElementById('presetParty')?.addEventListener('click', () => applyPreset('party'));
+
+    // Initial theme sync
+    updateThemeFromSliders();
+  </script>
+</body>
+</html>
