@@ -41,8 +41,11 @@ def load_tracks(tracks_path: Path) -> pd.DataFrame:
     if not required.issubset(df.columns):
         missing = required - set(df.columns)
         raise ValueError(f"tracks.csv missing columns: {sorted(missing)}")
-    # Prefer spotify_id if present, otherwise fallback to track_id
+    # Prefer spotify_id if present, otherwise fallback to track_id; if absent, synthesize from track_id
     id_col = "spotify_id" if "spotify_id" in df.columns else "track_id"
+    if id_col == "track_id" and "spotify_id" not in df.columns:
+        df["spotify_id"] = df["track_id"].astype(str)
+        id_col = "spotify_id"
     cols = [col for col in [id_col, "track_id", "name", "artist", "valence", "energy"] if col in df.columns]
     df = df[cols].dropna(subset=["name", "artist", "valence", "energy"])
     return df, id_col

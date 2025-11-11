@@ -44,23 +44,37 @@ def load_dataset(path: Path, tracks_path: Path | None = None, max_rows: int = 0,
     if not path.exists():
         raise FileNotFoundError(f"입력 CSV를 찾을 수 없습니다: {path}")
     df = pd.read_csv(path)
-    required = {"user_id", "spotify_id", "rating"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"필수 컬럼 누락 {path}: {sorted(missing)}")
+    # Accept datasets with either spotify_id or track_id; normalize to spotify_id when missing
+    base_required = {"user_id", "rating"}
+    if not base_required.issubset(df.columns):
+        missing = sorted(base_required - set(df.columns))
+        raise ValueError(f"필수 컬럼 누락 {path}: {missing}")
+
+    has_spotify = "spotify_id" in df.columns
+    has_track = "track_id" in df.columns
+    if not has_spotify and not has_track:
+        raise ValueError(f"spotify_id/track_id 둘 다 없음: {path}")
+
+    if not has_spotify and has_track:
+        # Create a string spotify_id surrogate from track_id so downstream stays consistent
+        df["spotify_id"] = df["track_id"].astype(str)
 
     needs_emotions = any(col not in df.columns for col in ("valence", "energy"))
     if needs_emotions:
         if tracks_path is None or not Path(tracks_path).exists():
             raise ValueError("Valence/Energy가 없고 tracks CSV도 없어 병합할 수 없습니다.")
         tracks_df = pd.read_csv(tracks_path)
-        if not {"spotify_id", "valence", "energy"}.issubset(tracks_df.columns):
-            raise ValueError("tracks CSV에는 spotify_id, valence, energy 컬럼이 필요합니다")
-        df = df.merge(
-            tracks_df[["spotify_id", "valence", "energy"]],
-            on="spotify_id",
-            how="left",
-        )
+        # Allow tracks.csv without spotify_id: align on track_id and then map to surrogate spotify_id
+        if {"spotify_id", "valence", "energy"}.issubset(tracks_df.columns):
+            right = tracks_df[["spotify_id", "valence", "energy"]]
+            on_col = "spotify_id"
+        elif {"track_id", "valence", "energy"}.issubset(tracks_df.columns):
+            right = tracks_df[["track_id", "valence", "energy"]].rename(columns={"track_id": "spotify_id"})
+            on_col = "spotify_id"
+        else:
+            raise ValueError("tracks CSV에는 (spotify_id 또는 track_id), valence, energy 컬럼이 필요합니다")
+
+        df = df.merge(right, on=on_col, how="left")
 
     required_emotion = {"valence", "energy"}
     missing_emotion = [col for col in required_emotion if col not in df.columns]
