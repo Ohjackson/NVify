@@ -1,5 +1,10 @@
 # Data files
+# Default ignore for CSV artifacts
 *.csv
+
+# Keep critical CSVs under version control
+!data/raw/Music\ Info.csv
+!data/processed/tracks.csv
 
 # Markdown docs
 *.md
