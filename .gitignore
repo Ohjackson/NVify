@@ -1,6 +1,12 @@
 # Data files
 # Default ignore for CSV artifacts
+# Default ignore for CSV artifacts
 *.csv
+
+# Keep critical CSVs under version control (LFS for large files)
+!data/raw/Music\ Info.csv
+!data/raw/User\ Listening\ History.csv
+!data/processed/tracks.csv
 
 # Keep critical CSVs under version control
 !data/raw/Music\ Info.csv
