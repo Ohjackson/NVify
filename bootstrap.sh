@@ -29,8 +29,8 @@ source "$VENV_DIR/bin/activate"
 python -m pip install --upgrade pip || true
 
 if [[ -f "requirements.txt" ]]; then
-  echo "[NVify] Installing requirements"
-  python -m pip install -r requirements.txt
+  echo "[NVify] Installing requirements (numpy from source to avoid macOS wheel issues)"
+  python -m pip install --no-binary numpy -r requirements.txt
 fi
 
 echo "[NVify] Bootstrap complete. Active python: $(command -v python)"

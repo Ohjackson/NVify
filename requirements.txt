@@ -1,5 +1,5 @@
 numpy<2
-pandas
+pandas<2.3
 scikit-learn
 scikit-surprise
 lightgbm
@@ -7,3 +7,4 @@ tqdm
 pyyaml
 flask
 spotipy
+kagglehub
