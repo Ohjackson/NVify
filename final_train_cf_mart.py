@@ -56,8 +56,11 @@ def load_dataset(path: Path, tracks_path: Path | None = None, max_rows: int = 0,
         raise ValueError(f"spotify_id/track_id 둘 다 없음: {path}")
 
     if not has_spotify and has_track:
-        # Create a string spotify_id surrogate from track_id so downstream stays consistent
-        df["spotify_id"] = df["track_id"].astype(str)
+        # Create a spotify_id surrogate from track_id so downstream stays consistent
+        df["spotify_id"] = df["track_id"]
+
+    # pandas.merge rejects mixed dtypes, so normalize to string/object everywhere
+    df["spotify_id"] = df["spotify_id"].astype(str)
 
     needs_emotions = any(col not in df.columns for col in ("valence", "energy"))
     if needs_emotions:
@@ -66,14 +69,19 @@ def load_dataset(path: Path, tracks_path: Path | None = None, max_rows: int = 0,
         tracks_df = pd.read_csv(tracks_path)
         # Allow tracks.csv without spotify_id: align on track_id and then map to surrogate spotify_id
         if {"spotify_id", "valence", "energy"}.issubset(tracks_df.columns):
-            right = tracks_df[["spotify_id", "valence", "energy"]]
+            right = tracks_df[["spotify_id", "valence", "energy"]].copy()
             on_col = "spotify_id"
         elif {"track_id", "valence", "energy"}.issubset(tracks_df.columns):
-            right = tracks_df[["track_id", "valence", "energy"]].rename(columns={"track_id": "spotify_id"})
+            right = (
+                tracks_df[["track_id", "valence", "energy"]]
+                .rename(columns={"track_id": "spotify_id"})
+                .copy()
+            )
             on_col = "spotify_id"
         else:
             raise ValueError("tracks CSV에는 (spotify_id 또는 track_id), valence, energy 컬럼이 필요합니다")
 
+        right["spotify_id"] = right["spotify_id"].astype(str)
         df = df.merge(right, on=on_col, how="left")
 
     required_emotion = {"valence", "energy"}
